@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Chat.Client/Chat.Client.csproj" Id="4fbdb913-b880-4033-9a93-76e9be6cdc92" />
+  <Project Path="Chat.Server/Chat.Server.csproj" Id="a566fa05-4a91-4e3e-8e34-6f929ea6dfa6" />
+  <Project Path="Chat.Shared/Chat.Shared.csproj" Id="82dfd7a7-80a0-4650-a45d-9720da95895f" />
+</Solution>
