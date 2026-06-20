@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using Chat.Shared;
@@ -6,6 +7,8 @@ using Chat.Shared;
 Console.Title = "TCP Chat - Server";
 int port = 5000;
 var tcpListener = new TcpListener(IPAddress.Any, port);
+
+var connectedClients = new ConcurrentDictionary<string, StreamWriter>();
 
 try
 {
@@ -15,8 +18,6 @@ try
     while (true)
     {
         var client = await tcpListener.AcceptTcpClientAsync();
-        LogSuccess($"New connection established: {client.Client.RemoteEndPoint}");
-
         _ = HandleClientAsync(client);
     }
 }
@@ -30,29 +31,69 @@ async Task HandleClientAsync(TcpClient client)
     var endPoint = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
     using var stream = client.GetStream();
     using var reader = new StreamReader(stream);
+    using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+    string currentUserName = string.Empty;
 
     try
     {
         while (true)
         {
             var jsonLine = await reader.ReadLineAsync();
-            if (string.IsNullOrEmpty(jsonLine)) break; // Client disconnected gracefully
+            if (string.IsNullOrEmpty(jsonLine)) break;
 
             var packet = JsonSerializer.Deserialize<MessagePacket>(jsonLine);
-            if (packet != null)
+            if (packet == null) continue;
+
+            if (string.IsNullOrEmpty(currentUserName))
             {
-                LogMessage(packet);
+                currentUserName = packet.Sender;
+                connectedClients.TryAdd(currentUserName, writer);
+
+                LogSuccess($"{currentUserName} joined the chat. ({endPoint})");
+                await BroadcastMessageAsync(packet);
+                continue;
             }
+
+            LogMessage(packet);
+            await BroadcastMessageAsync(packet);
         }
     }
     catch (Exception)
     {
-        LogWarning($"Connection lost with client: {endPoint}");
     }
     finally
     {
+        if (!string.IsNullOrEmpty(currentUserName))
+        {
+            connectedClients.TryRemove(currentUserName, out _);
+            LogWarning($"{currentUserName} disconnected.");
+
+            var leavePacket = new MessagePacket
+            {
+                Sender = "Server",
+                Content = $"{currentUserName} has left the chat.",
+                Type = MessageType.Leave
+            };
+            await BroadcastMessageAsync(leavePacket);
+        }
         client.Close();
-        LogWarning($"Client disconnected: {endPoint}");
+    }
+}
+
+async Task BroadcastMessageAsync(MessagePacket packet)
+{
+    var json = JsonSerializer.Serialize(packet);
+
+    foreach (var clientWriter in connectedClients.Values)
+    {
+        try
+        {
+            await clientWriter.WriteLineAsync(json);
+        }
+        catch
+        {
+        }
     }
 }
 

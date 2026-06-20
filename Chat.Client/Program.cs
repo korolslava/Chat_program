@@ -15,13 +15,14 @@ try
 
     using var stream = client.GetStream();
     using var writer = new StreamWriter(stream) { AutoFlush = true };
+    using var reader = new StreamReader(stream);
 
     Console.ForegroundColor = ConsoleColor.Yellow;
     Console.Write("Enter your username: ");
     Console.ResetColor();
 
     var userName = Console.ReadLine()?.Trim();
-    if (string.IsNullOrEmpty(userName)) userName = "Anonymous";
+    if (string.IsNullOrEmpty(userName)) userName = $"User_{new Random().Next(1000, 9999)}";
 
     Console.Clear();
     DrawHeader();
@@ -29,12 +30,18 @@ try
     PrintSystem("Type 'exit' to leave the chat.");
     Console.WriteLine(new string('-', 50));
 
+    var joinPacket = new MessagePacket
+    {
+        Sender = userName,
+        Content = $"{userName} joined the chat.",
+        Type = MessageType.Join
+    };
+    await writer.WriteLineAsync(JsonSerializer.Serialize(joinPacket));
+
+    _ = Task.Run(() => ReceiveMessagesAsync(reader));
+
     while (true)
     {
-        Console.ForegroundColor = ConsoleColor.DarkGreen;
-        Console.Write("You > ");
-        Console.ResetColor();
-
         var message = Console.ReadLine();
 
         if (string.IsNullOrWhiteSpace(message)) continue;
@@ -56,11 +63,60 @@ catch (Exception ex)
     PrintError($"Connection failed: {ex.Message}");
 }
 
+async Task ReceiveMessagesAsync(StreamReader reader)
+{
+    try
+    {
+        while (true)
+        {
+            var jsonLine = await reader.ReadLineAsync();
+            if (string.IsNullOrEmpty(jsonLine))
+            {
+                PrintSystem("Disconnected from server.");
+                break;
+            }
+
+            var packet = JsonSerializer.Deserialize<MessagePacket>(jsonLine);
+            if (packet != null)
+            {
+                DisplayIncomingMessage(packet);
+            }
+        }
+    }
+    catch
+    {
+        PrintSystem("Connection closed.");
+    }
+}
+
+void DisplayIncomingMessage(MessagePacket packet)
+{
+
+    var time = packet.Timestamp.ToLocalTime().ToString("HH:mm");
+
+    Console.ForegroundColor = ConsoleColor.DarkGray;
+    Console.Write($"\r[{time}] ");
+
+    if (packet.Type == MessageType.Join || packet.Type == MessageType.Leave)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"{packet.Content}");
+    }
+    else
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.Write($"{packet.Sender}: ");
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine(packet.Content);
+    }
+    Console.ResetColor();
+}
+
 void DrawHeader()
 {
     Console.ForegroundColor = ConsoleColor.Cyan;
     Console.WriteLine("==================================================");
-    Console.WriteLine("                      C H A T                     ");
+    Console.WriteLine("                  T C P   C H A T                 ");
     Console.WriteLine("==================================================");
     Console.ResetColor();
 }
