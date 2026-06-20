@@ -2,13 +2,21 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Chat.Shared;
+using Chat.Server.Data;
 
 Console.Title = "TCP Chat - Server";
 int port = 5000;
 var tcpListener = new TcpListener(IPAddress.Any, port);
-
 var connectedClients = new ConcurrentDictionary<string, StreamWriter>();
+
+using (var db = new ChatDbContext())
+{
+    LogSystem("Connecting to PostgreSQL and verifying database...");
+    await db.Database.EnsureCreatedAsync();
+    LogSystem("Database is ready.");
+}
 
 try
 {
@@ -45,18 +53,35 @@ async Task HandleClientAsync(TcpClient client)
             var packet = JsonSerializer.Deserialize<MessagePacket>(jsonLine);
             if (packet == null) continue;
 
-            if (string.IsNullOrEmpty(currentUserName))
+            if (packet.Type == MessageType.Join && string.IsNullOrEmpty(currentUserName))
             {
                 currentUserName = packet.Sender;
                 connectedClients.TryAdd(currentUserName, writer);
 
                 LogSuccess($"{currentUserName} joined the chat. ({endPoint})");
+
+                await SendHistoryToClientAsync(writer);
+
                 await BroadcastMessageAsync(packet);
                 continue;
             }
 
-            LogMessage(packet);
-            await BroadcastMessageAsync(packet);
+            if (packet.Type == MessageType.Chat)
+            {
+                using (var db = new ChatDbContext())
+                {
+                    db.Messages.Add(new ChatMessage
+                    {
+                        Sender = packet.Sender,
+                        Content = packet.Content,
+                        Timestamp = packet.Timestamp
+                    });
+                    await db.SaveChangesAsync();
+                }
+
+                LogMessage(packet);
+                await BroadcastMessageAsync(packet);
+            }
         }
     }
     catch (Exception)
@@ -78,6 +103,30 @@ async Task HandleClientAsync(TcpClient client)
             await BroadcastMessageAsync(leavePacket);
         }
         client.Close();
+    }
+}
+
+async Task SendHistoryToClientAsync(StreamWriter writer)
+{
+    using var db = new ChatDbContext();
+
+    var history = await db.Messages
+        .OrderByDescending(m => m.Timestamp)
+        .Take(20)
+        .ToListAsync();
+
+    history.Reverse();
+
+    foreach (var msg in history)
+    {
+        var historyPacket = new MessagePacket
+        {
+            Sender = msg.Sender,
+            Content = msg.Content,
+            Timestamp = msg.Timestamp,
+            Type = MessageType.Chat
+        };
+        await writer.WriteLineAsync(JsonSerializer.Serialize(historyPacket));
     }
 }
 
