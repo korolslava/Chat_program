@@ -7,181 +7,233 @@ Console.Title = "TCP Chat - Client";
 DrawHeader();
 
 using var client = new TcpClient();
+
 try
 {
-    PrintSystem("Connecting to the server (127.0.0.1:5000)...");
+    PrintInfo("Connecting to server...");
+
     await client.ConnectAsync("127.0.0.1", 5000);
-    PrintSuccess("Connected successfully!\n");
+
+    PrintSuccess("Connected!");
 
     using var stream = client.GetStream();
-    using var writer = new StreamWriter(stream) { AutoFlush = true };
+    using var writer = new StreamWriter(stream)
+    {
+        AutoFlush = true
+    };
+
     using var reader = new StreamReader(stream);
 
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.Write("Enter your username: ");
-    Console.ResetColor();
+    Console.Write("Username: ");
 
-    var userName = Console.ReadLine()?.Trim();
-    if (string.IsNullOrEmpty(userName)) userName = $"User_{new Random().Next(1000, 9999)}";
+    string userName =
+        Console.ReadLine()?.Trim() ?? "";
 
-    Console.Clear();
-    DrawHeader();
-    PrintSystem($"Welcome, {userName}! You can start typing messages.");
-    PrintSystem("Type 'exit' to leave the chat.");
-    PrintSystem("Type '/who' to see online users, or '/msg [Name] [Text]' for private messages.");
-    Console.WriteLine(new string('-', 50));
-
-    var joinPacket = new MessagePacket
+    if (string.IsNullOrWhiteSpace(userName))
     {
-        Sender = userName,
-        Content = $"{userName} joined the chat.",
-        Type = MessageType.Join
-    };
-    await writer.WriteLineAsync(JsonSerializer.Serialize(joinPacket));
+        userName =
+            $"User_{Random.Shared.Next(1000, 9999)}";
+    }
 
-    _ = Task.Run(() => ReceiveMessagesAsync(reader));
+    await writer.WriteLineAsync(
+        JsonSerializer.Serialize(
+            new MessagePacket
+            {
+                Sender = userName,
+                Content = $"{userName} joined",
+                Type = MessageType.Join
+            }));
+
+    _ = Task.Run(() =>
+        ReceiveMessagesAsync(reader));
 
     while (true)
     {
-        var message = Console.ReadLine();
+        string? input = Console.ReadLine();
 
-        if (string.IsNullOrWhiteSpace(message)) continue;
-        if (message.ToLower() == "exit") break;
+        if (string.IsNullOrWhiteSpace(input))
+            continue;
 
-        string targetUser = string.Empty;
-        string content = message;
+        if (input.ToLower() == "exit")
+            break;
 
-        if (message.StartsWith("/msg "))
+        if (input.StartsWith("/"))
         {
-            var parts = message.Split(' ', 3);
-            if (parts.Length >= 3)
-            {
-                targetUser = parts[1];
-                content = parts[2];
-            }
-            else
-            {
-                PrintSystem("Invalid format. Use: /msg [UserName] [Message]");
-                continue;
-            }
+            await writer.WriteLineAsync(
+                JsonSerializer.Serialize(
+                    new MessagePacket
+                    {
+                        Sender = userName,
+                        Content = input,
+                        Type = MessageType.Command
+                    }));
+
+            continue;
         }
 
-        if (message.ToLower() == "/who")
+        string receiver = "";
+
+        string content = input;
+
+        if (input.StartsWith("/msg "))
         {
-            var commandPacket = new MessagePacket
+            var parts = input.Split(' ', 3);
+
+            if (parts.Length < 3)
             {
-                Sender = userName,
-                Content = "/who",
-                Type = MessageType.Command
-            };
-            await writer.WriteLineAsync(JsonSerializer.Serialize(commandPacket));
-            continue;
+                PrintError(
+                    "Use: /msg [User] [Text]");
+
+                continue;
+            }
+
+            receiver = parts[1];
+
+            content = parts[2];
         }
 
         var packet = new MessagePacket
         {
             Sender = userName,
-            Receiver = targetUser,
+            Receiver = receiver,
             Content = content,
+            Timestamp = DateTime.UtcNow,
             Type = MessageType.Chat
         };
 
-        var json = JsonSerializer.Serialize(packet);
-        await writer.WriteLineAsync(json);
+        await writer.WriteLineAsync(
+            JsonSerializer.Serialize(packet));
     }
 }
 catch (Exception ex)
 {
-    PrintError($"Connection failed: {ex.Message}");
+    PrintError(ex.Message);
 }
 
-async Task ReceiveMessagesAsync(StreamReader reader)
+static async Task ReceiveMessagesAsync(
+    StreamReader reader)
 {
     try
     {
         while (true)
         {
-            var jsonLine = await reader.ReadLineAsync();
-            if (string.IsNullOrEmpty(jsonLine))
-            {
-                PrintSystem("Disconnected from server.");
+            string? json =
+                await reader.ReadLineAsync();
+
+            if (string.IsNullOrWhiteSpace(json))
                 break;
-            }
 
-            var packet = JsonSerializer.Deserialize<MessagePacket>(jsonLine);
-            if (packet != null)
-            {
-                DisplayIncomingMessage(packet);
-            }
+            var packet =
+                JsonSerializer.Deserialize<MessagePacket>(json);
 
-            if (packet.Type == MessageType.Command && packet.Content == "/clear")
+            if (packet == null)
+                continue;
+
+            if (packet.Type == MessageType.Command
+                && packet.Content == "/clear")
             {
                 Console.Clear();
+
                 DrawHeader();
+
                 continue;
             }
+
+            ShowPacket(packet);
         }
     }
     catch
     {
-        PrintSystem("Connection closed.");
+        PrintError("Disconnected.");
     }
 }
 
-void DisplayIncomingMessage(MessagePacket packet)
+static void ShowPacket(
+    MessagePacket packet)
 {
-    var time = packet.Timestamp.ToLocalTime().ToString("HH:mm");
-
     Console.ForegroundColor = ConsoleColor.DarkGray;
-    Console.Write($"\r[{time}] ");
 
-    if (packet.Type == MessageType.Join || packet.Type == MessageType.Leave || packet.Type == MessageType.System)
+    Console.Write(
+        $"[{packet.Timestamp.ToLocalTime():HH:mm}] ");
+
+    switch (packet.Type)
     {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"{packet.Content}");
-    }
-    else
-    {
-        if (!string.IsNullOrEmpty(packet.Receiver))
-        {
+        case MessageType.System:
+        case MessageType.Join:
+        case MessageType.Leave:
+
+            Console.ForegroundColor = ConsoleColor.Yellow;
+
+            Console.WriteLine(packet.Content);
+
+            break;
+
+        case MessageType.Private:
+
             Console.ForegroundColor = ConsoleColor.Magenta;
-            Console.Write($"[Private to {packet.Receiver}] ");
-        }
 
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write($"{packet.Sender}: ");
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine(packet.Content);
+            Console.Write("[PRIVATE] ");
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+
+            Console.Write($"{packet.Sender}: ");
+
+            Console.ForegroundColor = ConsoleColor.White;
+
+            Console.WriteLine(packet.Content);
+
+            break;
+
+        default:
+
+            Console.ForegroundColor = ConsoleColor.Cyan;
+
+            Console.Write($"{packet.Sender}: ");
+
+            Console.ForegroundColor = ConsoleColor.White;
+
+            Console.WriteLine(packet.Content);
+
+            break;
     }
+
     Console.ResetColor();
 }
 
-void DrawHeader()
+static void DrawHeader()
 {
     Console.ForegroundColor = ConsoleColor.Cyan;
-    Console.WriteLine("==================================================");
-    Console.WriteLine("                  T C P   C H A T                 ");
-    Console.WriteLine("==================================================");
+
+    Console.WriteLine("=====================================");
+    Console.WriteLine("            TCP CHAT");
+    Console.WriteLine("=====================================");
+
     Console.ResetColor();
 }
 
-void PrintSystem(string text)
+static void PrintInfo(string text)
 {
     Console.ForegroundColor = ConsoleColor.Cyan;
+
     Console.WriteLine(text);
+
     Console.ResetColor();
 }
 
-void PrintSuccess(string text)
+static void PrintSuccess(string text)
 {
     Console.ForegroundColor = ConsoleColor.Green;
+
     Console.WriteLine(text);
+
     Console.ResetColor();
 }
 
-void PrintError(string text)
+static void PrintError(string text)
 {
     Console.ForegroundColor = ConsoleColor.Red;
+
     Console.WriteLine(text);
+
     Console.ResetColor();
 }

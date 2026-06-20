@@ -1,238 +1,174 @@
-﻿using System.Collections.Concurrent;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
-using Chat.Shared;
 using Chat.Server.Data;
+using Chat.Server.Helpers;
+using Chat.Server.Services;
+using Chat.Shared;
 
 Console.Title = "TCP Chat - Server";
-int port = 5000;
-var tcpListener = new TcpListener(IPAddress.Any, port);
-var connectedClients = new ConcurrentDictionary<string, StreamWriter>();
+
+const int port = 5000;
+
+var listener = new TcpListener(IPAddress.Any, port);
+
+var clientManager = new ClientManager();
+var broadcastService = new BroadcastService(clientManager);
+var historyService = new HistoryService();
+var commandService = new CommandService(clientManager);
 
 using (var db = new ChatDbContext())
 {
-    LogSystem("Connecting to PostgreSQL and verifying database...");
+    ConsoleLogger.Info("Connecting to database...");
     await db.Database.EnsureCreatedAsync();
-    LogSystem("Database is ready.");
+    ConsoleLogger.Info("Database ready.");
 }
 
-try
-{
-    tcpListener.Start();
-    LogSystem($"Server started successfully on port {port}. Waiting for connections...");
+listener.Start();
 
-    while (true)
-    {
-        var client = await tcpListener.AcceptTcpClientAsync();
-        _ = HandleClientAsync(client);
-    }
-}
-catch (Exception ex)
+ConsoleLogger.Info($"Server started on port {port}");
+
+while (true)
 {
-    LogError($"Fatal server error: {ex.Message}");
+    TcpClient client = await listener.AcceptTcpClientAsync();
+
+    _ = Task.Run(() =>
+        HandleClientAsync(
+            client,
+            clientManager,
+            broadcastService,
+            historyService,
+            commandService));
 }
 
-async Task HandleClientAsync(TcpClient client)
+static async Task HandleClientAsync(
+    TcpClient client,
+    ClientManager clientManager,
+    BroadcastService broadcastService,
+    HistoryService historyService,
+    CommandService commandService)
 {
-    var endPoint = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
     using var stream = client.GetStream();
     using var reader = new StreamReader(stream);
-    using var writer = new StreamWriter(stream) { AutoFlush = true };
+    using var writer = new StreamWriter(stream)
+    {
+        AutoFlush = true
+    };
 
-    string currentUserName = string.Empty;
+    string currentUser = "";
 
     try
     {
         while (true)
         {
-            var jsonLine = await reader.ReadLineAsync();
-            if (string.IsNullOrEmpty(jsonLine)) break;
+            string? json = await reader.ReadLineAsync();
 
-            var packet = JsonSerializer.Deserialize<MessagePacket>(jsonLine);
-            if (packet == null) continue;
+            if (string.IsNullOrWhiteSpace(json))
+                break;
 
-            if (packet.Type == MessageType.Join && string.IsNullOrEmpty(currentUserName))
+            var packet =
+                JsonSerializer.Deserialize<MessagePacket>(json);
+
+            if (packet == null)
+                continue;
+
+            if (packet.Type == MessageType.Join)
             {
-                currentUserName = packet.Sender;
-                connectedClients.TryAdd(currentUserName, writer);
+                currentUser = packet.Sender;
 
-                LogSuccess($"{currentUserName} joined the chat. ({endPoint})");
+                clientManager.AddClient(currentUser, writer);
 
-                await SendHistoryToClientAsync(writer, currentUserName);
+                ConsoleLogger.Success($"{currentUser} joined");
 
-                await BroadcastMessageAsync(packet);
+                var history =
+                    await historyService.GetHistoryAsync(currentUser);
+
+                foreach (var msg in history)
+                {
+                    await writer.WriteLineAsync(
+                        JsonSerializer.Serialize(msg));
+                }
+
+                await broadcastService.BroadcastAsync(packet);
+
                 continue;
             }
 
             if (packet.Type == MessageType.Command)
             {
-                var parts = packet.Content.Split(' ');
-                string command = parts[0].ToLower();
+                await commandService.ExecuteAsync(packet, writer);
 
-                switch (command)
-                {
-                    case "/who":
-                        var users = string.Join(", ", connectedClients.Keys);
-                        await SendSystemMessage(writer, $"Online: {users}");
-                        break;
-
-                    case "/help":
-                        await SendSystemMessage(writer, "Available commands: /who, /clear, /nick [NewName], /msg [User] [Text], /exit");
-                        break;
-
-                    case "/nick":
-                        if (parts.Length > 1)
-                        {
-                            string newName = parts[1];
-                            if (connectedClients.TryRemove(currentUserName, out var writerToKeep))
-                            {
-                                currentUserName = newName;
-                                connectedClients.TryAdd(currentUserName, writerToKeep);
-                                await SendSystemMessage(writer, $"You are now known as {newName}");
-                            }
-                        }
-                        break;
-
-                    case "/clear":
-                        await writer.WriteLineAsync(JsonSerializer.Serialize(new MessagePacket { Type = MessageType.Command, Content = "/clear" }));
-                        break;
-                }
                 continue;
-            }
-
-            async Task SendSystemMessage(StreamWriter writer, string content)
-            {
-                var packet = new MessagePacket { Sender = "Server", Content = content, Type = MessageType.System };
-                await writer.WriteLineAsync(JsonSerializer.Serialize(packet));
             }
 
             if (packet.Type == MessageType.Chat)
             {
-                using (var db = new ChatDbContext())
-                {
-                    db.Messages.Add(new ChatMessage
-                    {
-                        Sender = packet.Sender,
-                        Receiver = packet.Receiver,
-                        Content = packet.Content,
-                        Timestamp = packet.Timestamp
-                    });
-                    await db.SaveChangesAsync();
-                }
+                await historyService.SaveMessageAsync(packet);
 
-                LogMessage(packet);
+                ConsoleLogger.Message(packet);
 
                 if (!string.IsNullOrEmpty(packet.Receiver))
                 {
-                    if (connectedClients.TryGetValue(packet.Receiver, out var targetWriter))
+                    if (clientManager.TryGetClient(
+                        packet.Receiver,
+                        out var targetWriter))
                     {
-                        var json = JsonSerializer.Serialize(packet);
-                        await targetWriter.WriteLineAsync(json);
-                        await writer.WriteLineAsync(json);
+                        var privatePacket = new MessagePacket
+                        {
+                            Sender = packet.Sender,
+                            Receiver = packet.Receiver,
+                            Content = packet.Content,
+                            Timestamp = DateTime.UtcNow,
+                            Type = MessageType.Private
+                        };
+
+                        string privateJson =
+                            JsonSerializer.Serialize(privatePacket);
+
+                        await targetWriter.WriteLineAsync(privateJson);
+
+                        await writer.WriteLineAsync(privateJson);
                     }
                     else
                     {
-                        var errorPacket = new MessagePacket
-                        {
-                            Sender = "Server",
-                            Content = $"User '{packet.Receiver}' is not online or doesn't exist.",
-                            Type = MessageType.System
-                        };
-                        await writer.WriteLineAsync(JsonSerializer.Serialize(errorPacket));
+                        await writer.WriteLineAsync(
+                            JsonSerializer.Serialize(
+                                new MessagePacket
+                                {
+                                    Sender = "Server",
+                                    Content = "User is offline.",
+                                    Type = MessageType.System
+                                }));
                     }
                 }
                 else
                 {
-                    await BroadcastMessageAsync(packet);
+                    await broadcastService.BroadcastAsync(packet);
                 }
             }
         }
     }
-    catch (Exception)
+    catch (Exception ex)
     {
+        ConsoleLogger.Error(ex.Message);
     }
     finally
     {
-        if (!string.IsNullOrEmpty(currentUserName))
+        if (!string.IsNullOrEmpty(currentUser))
         {
-            connectedClients.TryRemove(currentUserName, out _);
-            LogWarning($"{currentUserName} disconnected.");
+            clientManager.RemoveClient(currentUser);
 
-            var leavePacket = new MessagePacket
-            {
-                Sender = "Server",
-                Content = $"{currentUserName} has left the chat.",
-                Type = MessageType.Leave
-            };
-            await BroadcastMessageAsync(leavePacket);
+            await broadcastService.BroadcastAsync(
+                new MessagePacket
+                {
+                    Sender = "Server",
+                    Content = $"{currentUser} left the chat",
+                    Type = MessageType.Leave
+                });
+
+            ConsoleLogger.Warning($"{currentUser} disconnected");
         }
+
         client.Close();
     }
-}
-
-async Task SendHistoryToClientAsync(StreamWriter writer, string currentUserName)
-{
-    using var db = new ChatDbContext();
-
-    var history = await db.Messages
-        .Where(m => string.IsNullOrEmpty(m.Receiver) || m.Receiver == currentUserName || m.Sender == currentUserName)
-        .OrderByDescending(m => m.Timestamp)
-        .Take(20)
-        .ToListAsync();
-
-    history.Reverse();
-
-    foreach (var msg in history)
-    {
-        var historyPacket = new MessagePacket
-        {
-            Sender = msg.Sender,
-            Content = msg.Content,
-            Timestamp = msg.Timestamp,
-            Type = MessageType.Chat
-        };
-        await writer.WriteLineAsync(JsonSerializer.Serialize(historyPacket));
-    }
-}
-
-async Task BroadcastMessageAsync(MessagePacket packet)
-{
-    var json = JsonSerializer.Serialize(packet);
-
-    foreach (var clientWriter in connectedClients.Values)
-    {
-        try
-        {
-            await clientWriter.WriteLineAsync(json);
-        }
-        catch
-        {
-        }
-    }
-}
-
-void LogSystem(string message) => PrintColored($"[INFO] {message}", ConsoleColor.Cyan);
-void LogSuccess(string message) => PrintColored($"[JOIN] {message}", ConsoleColor.Green);
-void LogWarning(string message) => PrintColored($"[LEAVE] {message}", ConsoleColor.DarkYellow);
-void LogError(string message) => PrintColored($"[ERROR] {message}", ConsoleColor.Red);
-
-void LogMessage(MessagePacket packet)
-{
-    var time = packet.Timestamp.ToLocalTime().ToString("HH:mm:ss");
-    Console.ForegroundColor = ConsoleColor.DarkGray;
-    Console.Write($"[{time}] ");
-    Console.ForegroundColor = ConsoleColor.Magenta;
-    Console.Write($"{packet.Sender}: ");
-    Console.ForegroundColor = ConsoleColor.White;
-    Console.WriteLine(packet.Content);
-    Console.ResetColor();
-}
-
-void PrintColored(string text, ConsoleColor color)
-{
-    Console.ForegroundColor = color;
-    Console.WriteLine(text);
-    Console.ResetColor();
 }
