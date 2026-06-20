@@ -47,10 +47,29 @@ try
         if (string.IsNullOrWhiteSpace(message)) continue;
         if (message.ToLower() == "exit") break;
 
+        string targetUser = string.Empty;
+        string content = message;
+
+        if (message.StartsWith("/msg "))
+        {
+            var parts = message.Split(' ', 3);
+            if (parts.Length >= 3)
+            {
+                targetUser = parts[1];
+                content = parts[2];
+            }
+            else
+            {
+                PrintSystem("Invalid format. Use: /msg [UserName] [Message]");
+                continue;
+            }
+        }
+
         var packet = new MessagePacket
         {
             Sender = userName,
-            Content = message,
+            Receiver = targetUser,
+            Content = content,
             Type = MessageType.Chat
         };
 
@@ -91,19 +110,24 @@ async Task ReceiveMessagesAsync(StreamReader reader)
 
 void DisplayIncomingMessage(MessagePacket packet)
 {
-
     var time = packet.Timestamp.ToLocalTime().ToString("HH:mm");
 
     Console.ForegroundColor = ConsoleColor.DarkGray;
     Console.Write($"\r[{time}] ");
 
-    if (packet.Type == MessageType.Join || packet.Type == MessageType.Leave)
+    if (packet.Type == MessageType.Join || packet.Type == MessageType.Leave || packet.Type == MessageType.System)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine($"{packet.Content}");
     }
     else
     {
+        if (!string.IsNullOrEmpty(packet.Receiver))
+        {
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.Write($"[Private to {packet.Receiver}] ");
+        }
+
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.Write($"{packet.Sender}: ");
         Console.ForegroundColor = ConsoleColor.White;

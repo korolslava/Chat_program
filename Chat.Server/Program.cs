@@ -60,7 +60,7 @@ async Task HandleClientAsync(TcpClient client)
 
                 LogSuccess($"{currentUserName} joined the chat. ({endPoint})");
 
-                await SendHistoryToClientAsync(writer);
+                await SendHistoryToClientAsync(writer, currentUserName);
 
                 await BroadcastMessageAsync(packet);
                 continue;
@@ -73,6 +73,7 @@ async Task HandleClientAsync(TcpClient client)
                     db.Messages.Add(new ChatMessage
                     {
                         Sender = packet.Sender,
+                        Receiver = packet.Receiver,
                         Content = packet.Content,
                         Timestamp = packet.Timestamp
                     });
@@ -80,7 +81,30 @@ async Task HandleClientAsync(TcpClient client)
                 }
 
                 LogMessage(packet);
-                await BroadcastMessageAsync(packet);
+
+                if (!string.IsNullOrEmpty(packet.Receiver))
+                {
+                    if (connectedClients.TryGetValue(packet.Receiver, out var targetWriter))
+                    {
+                        var json = JsonSerializer.Serialize(packet);
+                        await targetWriter.WriteLineAsync(json);
+                        await writer.WriteLineAsync(json);
+                    }
+                    else
+                    {
+                        var errorPacket = new MessagePacket
+                        {
+                            Sender = "Server",
+                            Content = $"User '{packet.Receiver}' is not online or doesn't exist.",
+                            Type = MessageType.System
+                        };
+                        await writer.WriteLineAsync(JsonSerializer.Serialize(errorPacket));
+                    }
+                }
+                else
+                {
+                    await BroadcastMessageAsync(packet);
+                }
             }
         }
     }
@@ -106,11 +130,12 @@ async Task HandleClientAsync(TcpClient client)
     }
 }
 
-async Task SendHistoryToClientAsync(StreamWriter writer)
+async Task SendHistoryToClientAsync(StreamWriter writer, string currentUserName)
 {
     using var db = new ChatDbContext();
 
     var history = await db.Messages
+        .Where(m => string.IsNullOrEmpty(m.Receiver) || m.Receiver == currentUserName || m.Sender == currentUserName)
         .OrderByDescending(m => m.Timestamp)
         .Take(20)
         .ToListAsync();
