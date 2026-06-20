@@ -113,6 +113,13 @@ async Task ReceiveMessagesAsync(StreamReader reader)
             {
                 DisplayIncomingMessage(packet);
             }
+
+            if (packet.Type == MessageType.Command && packet.Content == "/clear")
+            {
+                Console.Clear();
+                DrawHeader();
+                continue;
+            }
         }
     }
     catch

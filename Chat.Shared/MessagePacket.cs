@@ -1,21 +1,14 @@
-﻿using System;
-
-namespace Chat.Shared;
-
-public enum MessageType
-{
-    Chat,
-    System,
-    Join,
-    Leave,
-    Command
-}
+﻿namespace Chat.Shared;
 
 public class MessagePacket
 {
     public string Sender { get; set; } = string.Empty;
+
     public string Receiver { get; set; } = string.Empty;
+
     public string Content { get; set; } = string.Empty;
-    public MessageType Type { get; set; } = MessageType.Chat;
+
+    public MessageType Type { get; set; }
+
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }

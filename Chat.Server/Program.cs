@@ -68,20 +68,44 @@ async Task HandleClientAsync(TcpClient client)
 
             if (packet.Type == MessageType.Command)
             {
-                if (packet.Content == "/who")
+                var parts = packet.Content.Split(' ');
+                string command = parts[0].ToLower();
+
+                switch (command)
                 {
-                    var activeUsers = string.Join(", ", connectedClients.Keys);
+                    case "/who":
+                        var users = string.Join(", ", connectedClients.Keys);
+                        await SendSystemMessage(writer, $"Online: {users}");
+                        break;
 
-                    var response = new MessagePacket
-                    {
-                        Sender = "Server",
-                        Content = $"Online users ({connectedClients.Count}): {activeUsers}",
-                        Type = MessageType.System
-                    };
+                    case "/help":
+                        await SendSystemMessage(writer, "Available commands: /who, /clear, /nick [NewName], /msg [User] [Text], /exit");
+                        break;
 
-                    await writer.WriteLineAsync(JsonSerializer.Serialize(response));
+                    case "/nick":
+                        if (parts.Length > 1)
+                        {
+                            string newName = parts[1];
+                            if (connectedClients.TryRemove(currentUserName, out var writerToKeep))
+                            {
+                                currentUserName = newName;
+                                connectedClients.TryAdd(currentUserName, writerToKeep);
+                                await SendSystemMessage(writer, $"You are now known as {newName}");
+                            }
+                        }
+                        break;
+
+                    case "/clear":
+                        await writer.WriteLineAsync(JsonSerializer.Serialize(new MessagePacket { Type = MessageType.Command, Content = "/clear" }));
+                        break;
                 }
                 continue;
+            }
+
+            async Task SendSystemMessage(StreamWriter writer, string content)
+            {
+                var packet = new MessagePacket { Sender = "Server", Content = content, Type = MessageType.System };
+                await writer.WriteLineAsync(JsonSerializer.Serialize(packet));
             }
 
             if (packet.Type == MessageType.Chat)

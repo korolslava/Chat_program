@@ -4,10 +4,14 @@ namespace Chat.Server.Data;
 
 public class ChatDbContext : DbContext
 {
-    public DbSet<ChatMessage> Messages { get; set; }
+    public DbSet<ChatMessage> Messages => Set<ChatMessage>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        optionsBuilder.UseNpgsql("Host=localhost;Database=TcpChatDb;Username=postgres;Password=postgres");
+        var connectionString =
+            Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
+            ?? "Host=localhost;Database=TcpChatDb;Username=postgres;Password=postgres";
+
+        optionsBuilder.UseNpgsql(connectionString);
     }
 }
