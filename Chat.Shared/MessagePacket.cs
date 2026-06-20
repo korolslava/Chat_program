@@ -7,7 +7,8 @@ public enum MessageType
     Chat,
     System,
     Join,
-    Leave
+    Leave,
+    Command
 }
 
 public class MessagePacket

@@ -28,6 +28,7 @@ try
     DrawHeader();
     PrintSystem($"Welcome, {userName}! You can start typing messages.");
     PrintSystem("Type 'exit' to leave the chat.");
+    PrintSystem("Type '/who' to see online users, or '/msg [Name] [Text]' for private messages.");
     Console.WriteLine(new string('-', 50));
 
     var joinPacket = new MessagePacket
@@ -63,6 +64,18 @@ try
                 PrintSystem("Invalid format. Use: /msg [UserName] [Message]");
                 continue;
             }
+        }
+
+        if (message.ToLower() == "/who")
+        {
+            var commandPacket = new MessagePacket
+            {
+                Sender = userName,
+                Content = "/who",
+                Type = MessageType.Command
+            };
+            await writer.WriteLineAsync(JsonSerializer.Serialize(commandPacket));
+            continue;
         }
 
         var packet = new MessagePacket

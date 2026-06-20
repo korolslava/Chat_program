@@ -66,6 +66,24 @@ async Task HandleClientAsync(TcpClient client)
                 continue;
             }
 
+            if (packet.Type == MessageType.Command)
+            {
+                if (packet.Content == "/who")
+                {
+                    var activeUsers = string.Join(", ", connectedClients.Keys);
+
+                    var response = new MessagePacket
+                    {
+                        Sender = "Server",
+                        Content = $"Online users ({connectedClients.Count}): {activeUsers}",
+                        Type = MessageType.System
+                    };
+
+                    await writer.WriteLineAsync(JsonSerializer.Serialize(response));
+                }
+                continue;
+            }
+
             if (packet.Type == MessageType.Chat)
             {
                 using (var db = new ChatDbContext())
