@@ -13,6 +13,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d TcpChatDb"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
 
   server:
     build:
@@ -24,13 +29,14 @@ services:
     restart: always
 
     environment:
-      DB_CONNECTION_STRING: Host=postgres;Database=TcpChatDb;Username=postgres;Password=postgres
+      DB_CONNECTION_STRING: "Host=postgres;Database=TcpChatDb;Username=postgres;Password=postgres"
 
     ports:
       - "5000:5000"
 
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres-data:

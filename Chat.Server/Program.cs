@@ -17,11 +17,36 @@ var broadcastService = new BroadcastService(clientManager);
 var historyService = new HistoryService();
 var commandService = new CommandService(clientManager);
 
-using (var db = new ChatDbContext())
+// Ensure database is available with simple retry logic
+var maxAttempts = 20;
+var attempt = 0;
+var delayMs = 3000;
+while (true)
 {
-    ConsoleLogger.Info("Connecting to database...");
-    await db.Database.EnsureCreatedAsync();
-    ConsoleLogger.Info("Database ready.");
+    try
+    {
+        using (var db = new ChatDbContext())
+        {
+            ConsoleLogger.Info("Connecting to database...");
+            await db.Database.EnsureCreatedAsync();
+            ConsoleLogger.Info("Database ready.");
+        }
+
+        break;
+    }
+    catch (Exception ex)
+    {
+        attempt++;
+        ConsoleLogger.Warning($"Database connection attempt {attempt} failed: {ex}");
+
+        if (attempt >= maxAttempts)
+        {
+            ConsoleLogger.Error("Unable to connect to database after multiple attempts. Exiting.");
+            return;
+        }
+
+        await Task.Delay(delayMs);
+    }
 }
 
 listener.Start();

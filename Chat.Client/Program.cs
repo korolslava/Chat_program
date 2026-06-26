@@ -6,13 +6,21 @@ Console.Title = "TCP Chat - Client";
 
 DrawHeader();
 
+string serverHost = Environment.GetEnvironmentVariable("SERVER_HOST") ?? "127.0.0.1";
+string serverPortStr = Environment.GetEnvironmentVariable("SERVER_PORT") ?? "5000";
+
+if (!int.TryParse(serverPortStr, out int serverPort))
+{
+    serverPort = 5000;
+}
+
 using var client = new TcpClient();
 
 try
 {
-    PrintInfo("Connecting to server...");
+    PrintInfo($"Connecting to server at {serverHost}:{serverPort}...");
 
-    await client.ConnectAsync("127.0.0.1", 5000);
+    await client.ConnectAsync(serverHost, serverPort);
 
     PrintSuccess("Connected!");
 

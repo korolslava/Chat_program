@@ -1,13 +1,13 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY *.sln* ./
+COPY *.slnx ./
 
 COPY Chat.Shared/*.csproj ./Chat.Shared/
 COPY Chat.Server/*.csproj ./Chat.Server/
 COPY Chat.Client/*.csproj ./Chat.Client/
 
-RUN dotnet restore
+RUN dotnet restore Chat.Server/Chat.Server.csproj
 
 COPY . .
 
